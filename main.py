@@ -1,80 +1,119 @@
-# main.py - Versão com DuckDuckGo (sem precisar de Serper)
+# main.py - VERSÃO ECONÔMICA (1 CHAMADA APENAS)
 import os
-from tools import StockPriceTool
-from langchain_community.tools import DuckDuckGoSearchRun
+import sys
+import time
+
+# --- 1. CONFIGURAÇÃO DE CHAVE ---
+if "GOOGLE_API_KEY" in os.environ: del os.environ["GOOGLE_API_KEY"]
+if "GEMINI_API_KEY" not in os.environ:
+    print("❌ ERRO: Defina GEMINI_API_KEY no comando.")
+    sys.exit(1)
+
+# Importações
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.tools import Tool
-
-# Imports do LangGraph
-from langgraph.prebuilt import create_react_agent
-
-# --- 1. Inicializar as Ferramentas ---
-stock_tool = StockPriceTool()
-
-# Usar DuckDuckGo em vez de Serper (não precisa de API key)
-search = DuckDuckGoSearchRun()
-google_search_tool = Tool(
-    name="Web_Search",
-    description="Pesquisa na web para obter: 1. Resumo da empresa. 2. Notícias recentes com links.",
-    func=search.run
-)
-
-tools = [stock_tool, google_search_tool]
-
-# --- 2. Inicializar o LLM ---
-llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-exp", temperature=0.0)
-
-# --- 3. Criar o Agente usando LangGraph ---
-agent_executor = create_react_agent(llm, tools)
-
-# --- 4. Execução ---
-company_name_input = "Ambev"
-
-query = f"""
-Você é um analista de Investment Banking. Para a empresa "{company_name_input}", forneça:
-
-1. RESUMO DA EMPRESA: Setor de atuação, breve histórico e principais produtos/serviços
-2. NOTÍCIAS RECENTES: Busque 2-3 notícias recentes com título e link
-3. VALOR DA AÇÃO: Consulte o preço atual ou mais recente da ação
-
-Compile tudo em um relatório organizado e estruturado no formato:
-
-=== RELATÓRIO DE ANÁLISE: {company_name_input.upper()} ===
-
-📊 1. RESUMO DA EMPRESA
-[Setor, histórico, produtos/serviços]
-
-📰 2. NOTÍCIAS RECENTES
-• [Título] - [Link]
-• [Título] - [Link]
-• [Título] - [Link]
-
-💰 3. VALOR DA AÇÃO
-[Ticker e preço atual]
-"""
-
-print(f"{'='*60}")
-print(f"🔍 ANÁLISE DE EMPRESA - {company_name_input.upper()}")
-print(f"{'='*60}\n")
+from langchain_core.messages import HumanMessage
 
 try:
-    messages = [{"role": "user", "content": query}]
+    from duckduckgo_search import DDGS
+except ImportError:
+    print("❌ Erro: pip install -U duckduckgo-search")
+    sys.exit(1)
+
+# --- 2. COLETA DE DADOS MANUAL (CUSTO ZERO DE TOKEN) ---
+
+def search_web_manual(query):
+    """Busca no DuckDuckGo sem gastar IA."""
+    print(f"🔎 Pesquisando: '{query}'...")
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=3))
+        if not results: return "Sem resultados."
+        return "\n".join([f"- {r['title']}: {r['href']}\n  Resumo: {r['body']}" for r in results])
+    except Exception as e:
+        return f"Erro na busca: {e}"
+
+def get_stock_manual(ticker):
+    """Pega cotação sem gastar IA."""
+    print(f"💰 Consultando ação: {ticker}...")
+    import yfinance as yf
+    try:
+        s = yf.Ticker(ticker + ".SA")
+        # Tenta pegar preço de várias formas
+        p = s.fast_info.last_price
+        if not p:
+             hist = s.history(period="1d")
+             if not hist.empty: p = hist['Close'].iloc[-1]
+        
+        return f"R$ {p:.2f}" if p else "Preço não disponível."
+    except Exception as e:
+        return f"Erro cotação: {e}"
+
+# --- 3. ORQUESTRAÇÃO MANUAL ---
+
+company = "Ambev"
+print(f"🚀 INICIANDO MODO ECONOMICO PARA: {company}\n")
+
+# Passo 1: Coletar dados (Python puro, rápido e grátis)
+dados_resumo = search_web_manual(f"{company} resumo setor histórico produtos")
+time.sleep(2) # Pausa para não bloquear o DuckDuckGo
+
+dados_noticias = search_web_manual(f"{company} notícias recentes economia negócios")
+time.sleep(2)
+
+dados_acao = get_stock_manual("ABEV3")
+
+print("\n📦 Dados coletados! Montando o prompt para o Gemini...")
+
+# Passo 2: Montar o Prompt com os dados já mastigados
+prompt_final = f"""
+Você é um analista financeiro. Eu já coletei os dados brutos sobre a empresa {company}. 
+Sua tarefa é APENAS formatar esses dados em um relatório profissional.
+
+--- DADOS COLETADOS ---
+1. SOBRE A EMPRESA:
+{dados_resumo}
+
+2. NOTÍCIAS RECENTES (Use os links fornecidos):
+{dados_noticias}
+
+3. COTAÇÃO ATUAL:
+{dados_acao}
+-----------------------
+
+SAÍDA ESPERADA:
+Crie um relatório organizado em Markdown com:
+- Título
+- Resumo Executivo (Setor e Histórico)
+- Seção de Notícias (Com Título e Link)
+- Destaque do Valor da Ação
+"""
+
+# --- 4. CHAMADA ÚNICA AO LLM ---
+
+# Usando o modelo que apareceu na sua lista como disponível
+# 'gemini-2.5-flash' é o mais novo e costuma ter cota livre.
+MODELO = "gemini-2.5-flash" 
+
+print(f"🔌 Enviando para o Gemini ({MODELO}) - 1 ÚNICA CHAMADA...")
+
+try:
+    llm = ChatGoogleGenerativeAI(
+        model=MODELO,
+        temperature=0.2,
+        google_api_key=os.environ["GEMINI_API_KEY"]
+    )
     
-    print("⏳ Coletando informações...\n")
+    resposta = llm.invoke(prompt_final)
     
-    # Executa o agente
-    result = agent_executor.invoke({"messages": messages})
-    
-    # Extrai a resposta final
-    final_message = result["messages"][-1]
-    
-    print("\n" + "="*60)
-    print("📋 RELATÓRIO FINAL")
-    print("="*60)
-    print(final_message.content)
-    print("\n" + "="*60)
-    
+    print("\n" + "="*50)
+    print("✅ RELATÓRIO FINAL GERADO COM SUCESSO")
+    print("="*50)
+    print(resposta.content)
+    print("="*50)
+
 except Exception as e:
-    print(f"❌ Erro na execução: {e}")
-    import traceback
-    traceback.print_exc()
+    print(f"\n❌ Erro na chamada: {e}")
+    if "404" in str(e):
+        print("💡 Dica: Tente mudar a variável MODELO para 'gemini-2.0-flash' no código.")
+    if "429" in str(e):
+        print("💡 Dica: Espere 1 minuto. Sua conta está 100% cheia.")
