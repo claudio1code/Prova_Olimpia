@@ -91,6 +91,7 @@ def get_price(state: State):
     ticker = state["ticker"]
     print(f"💰 Cotação: {ticker}...")
     
+    price_info = f"Erro ({ticker})"
     try:
         stock = yf.Ticker(ticker)
         price = stock.fast_info.last_price
