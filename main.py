@@ -1,88 +1,86 @@
 # main.py
 import os
-# Importa a sua Custom Tool que está no arquivo tools.py
 from tools import StockPriceTool 
 
-# Importa o Agent e o AgentType da comunidade, corrigindo os erros de versão.
-from langchain_community.agents import initialize_agent, AgentType 
+# --- Importações Corrigidas e Robustas ---
+# Tenta importar AgentExecutor do local novo, se falhar, tenta o antigo
+try:
+    from langchain.agents import AgentExecutor
+except ImportError:
+    from langchain.agents.agent import AgentExecutor
+
+# Tenta importar create_react_agent do local novo, se falhar, tenta o antigo
+try:
+    from langchain.agents import create_react_agent
+except ImportError:
+    from langchain.agents.react.agent import create_react_agent
+
+from langchain_community.tools import SerperAPIWrapper
 from langchain_google_genai import ChatGoogleGenerativeAI
-# Usaremos a SerperAPIWrapper por ser mais rápida e fácil de configurar que a GoogleSearchAPIWrapper
-from langchain_community.tools import SerperAPIWrapper 
 from langchain.tools import Tool
-
-# --- CONFIGURAÇÃO ---
-# O LangChain vai buscar a chave de API automaticamente na variável de ambiente:
-# export GEMINI_API_KEY="..."
-# Para a busca, você precisa definir a chave da Serper API:
-# export SERPER_API_KEY="..."
-
+from langchain_core.prompts import PromptTemplate
 
 # --- 1. Inicializar as Ferramentas ---
-
-# A. Ferramenta para Cotação (Custom Tool)
 stock_tool = StockPriceTool()
-
-# B. Ferramenta para Busca na Web (Resumo e Notícias)
-# A SerperAPIWrapper é usada para coletar Resumo e Notícias.
 search_wrapper = SerperAPIWrapper()
 google_search_tool = Tool(
     name="Google_Search_Tool",
-    description=(
-        "Use esta ferramenta para pesquisar na web. É essencial para obter: "
-        "1. Resumo/descrição da empresa (setor, histórico). "
-        "2. Notícias recentes (título e link)."
-    ),
+    description="Pesquisa na web para obter: 1. Resumo da empresa. 2. Notícias recentes.",
     func=search_wrapper.run
 )
-
-# Lista de todas as ferramentas disponíveis para o Agent
 tools = [stock_tool, google_search_tool]
 
+# --- 2. Inicializar o LLM ---
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0)
 
-# --- 2. Inicializar o LLM (Gemini) ---
-# O 'gemini-2.5-flash' é rápido e excelente para este tipo de raciocínio.
-# A chave GEMINI_API_KEY é lida automaticamente do ambiente.
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0) 
+# --- 3. Criar o Prompt (ReAct) ---
+template = '''Answer the following questions as best you can. You have access to the following tools:
 
+{tools}
 
-# --- 3. Inicializar o Agent (O Orquestrador) ---
-# Usamos o AgentType.ZERO_SHOT_REACT_DESCRIPTION, que decide qual tool usar com base na descrição
-agent = initialize_agent(
-    tools, 
-    llm, 
-    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION, 
-    verbose=True, # IMPORTANTE: Mostra o raciocínio do Agent (Ótimo para o print de terminal!)
+Use the following format:
+
+Question: the input question you must answer
+Thought: you should always think about what to do
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
+
+Begin!
+
+Question: {input}
+Thought:{agent_scratchpad}'''
+
+prompt = PromptTemplate.from_template(template)
+
+# --- 4. Criar e Executar o Agente ---
+agent = create_react_agent(llm, tools, prompt)
+
+agent_executor = AgentExecutor(
+    agent=agent, 
+    tools=tools, 
+    verbose=True, 
     handle_parsing_errors=True,
     max_iterations=10
 )
 
-
-# --- 4. O Prompt de Execução (O Desafio) ---
-
-# Este prompt direciona o Agent para usar as ferramentas na ordem correta e formatar a saída.
-company_name_input = "Ambev" # Exemplo: Altere o nome aqui
-
-query_template = f"""
-Comporte-se como um analista de Investment Banking. Sua tarefa é compilar um relatório rápido e organizado para a empresa "{company_name_input}", realizando OBRIGATORIAMENTE as seguintes etapas:
-
-1. Use a ferramenta de busca para obter um resumo/descrição detalhada da empresa (setor, breve histórico, produtos/serviços).
-2. Use a ferramenta de busca para coletar 2 ou 3 notícias RECENTES sobre a empresa, incluindo o título da notícia e, se possível, o link (URL) da matéria original.
-3. Use a ferramenta de cotação de ações para consultar o valor ATUAL da ação.
-
-A saída final deve ser o relatório completo e organizado.
+# --- 5. Execução ---
+company_name_input = "Ambev" 
+query = f"""
+Analista de Investment Banking:
+1. Resumo da empresa "{company_name_input}" (setor, histórico).
+2. 2-3 Notícias recentes (título e link).
+3. Valor ATUAL da ação.
+Compile um relatório organizado.
 """
 
-
-# --- 5. Execução e Saída ---
-print(f"\n=======================================================")
-print(f"  EXECUTANDO ANÁLISE DO AGENT PARA: {company_name_input}")
-print(f"=======================================================\n")
-
-# A saída com verbose=True já garante o "print de terminal" com o processo
-response = agent.invoke({"input": query_template})
-
-print("\n=====================================================")
-print(f"           ✅ RELATÓRIO FINAL: {company_name_input.upper()}")
-print("=====================================================")
-print(response['output'])
-print("=====================================================")
+print(f"--- INICIANDO ANÁLISE PARA: {company_name_input} ---")
+try:
+    response = agent_executor.invoke({"input": query})
+    print("\n--- RELATÓRIO FINAL ---")
+    print(response['output'])
+except Exception as e:
+    print(f"Erro na execução: {e}")
