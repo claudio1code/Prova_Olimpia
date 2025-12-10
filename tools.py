@@ -2,8 +2,6 @@ import yfinance as yf
 from langchain.tools import BaseTool
 from typing import Optional, Type
 from pydantic import BaseModel, Field
-from langchain_community.agents import initialize_agent 
-from langchain.agents import AgentType
 
 # --- Mapeamento de Empresas Brasileiras para Tickers (simplificado) ---
 # Você pode expandir esta lista conforme a necessidade

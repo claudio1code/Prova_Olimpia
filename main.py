@@ -3,7 +3,8 @@ import os
 # Importa a sua Custom Tool que está no arquivo tools.py
 from tools import StockPriceTool 
 
-from langchain.agents import initialize_agent, AgentType
+from langchain.agents import AgentType
+from langchain_community.agents import initialize_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.tools import GoogleSearchAPIWrapper
 from langchain.tools import Tool
