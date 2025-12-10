@@ -1,20 +1,19 @@
-# main.py
+# main.py - Versão LangGraph (LangChain 1.1+)
 import os
-from tools import StockPriceTool 
-
-# --- Importações Corrigidas para LangChain Moderno ---
-from langchain.agents import create_react_agent, AgentExecutor
+from tools import StockPriceTool
 from langchain_community.tools import SerperAPIWrapper
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.tools import Tool
-from langchain_core.prompts import PromptTemplate
+
+# Imports do LangGraph (novo sistema de agentes no LangChain 1.1+)
+from langgraph.prebuilt import create_react_agent
 
 # --- 1. Inicializar as Ferramentas ---
 stock_tool = StockPriceTool()
 search_wrapper = SerperAPIWrapper()
 google_search_tool = Tool(
     name="Google_Search_Tool",
-    description="Pesquisa na web para obter: 1. Resumo da empresa. 2. Notícias recentes.",
+    description="Pesquisa na web para obter: 1. Resumo da empresa. 2. Notícias recentes com links.",
     func=search_wrapper.run
 )
 tools = [stock_tool, google_search_tool]
@@ -22,42 +21,13 @@ tools = [stock_tool, google_search_tool]
 # --- 2. Inicializar o LLM ---
 llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-exp", temperature=0.0)
 
-# --- 3. Criar o Prompt (ReAct) ---
-template = '''Answer the following questions as best you can. You have access to the following tools:
+# --- 3. Criar o Agente usando LangGraph ---
+agent_executor = create_react_agent(llm, tools)
 
-{tools}
+# --- 4. Execução ---
+company_name_input = "Ambev"
 
-Use the following format:
-
-Question: the input question you must answer
-Thought: you should always think about what to do
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can repeat N times)
-Thought: I now know the final answer
-Final Answer: the final answer to the original input question
-
-Begin!
-
-Question: {input}
-Thought:{agent_scratchpad}'''
-
-prompt = PromptTemplate.from_template(template)
-
-# --- 4. Criar e Executar o Agente ---
-agent = create_react_agent(llm, tools, prompt)
-
-agent_executor = AgentExecutor(
-    agent=agent, 
-    tools=tools, 
-    verbose=True, 
-    handle_parsing_errors=True,
-    max_iterations=10
-)
-
-# --- 5. Execução ---
-company_name_input = "Ambev" 
+# Sistema de mensagens para o agente
 query = f"""
 Você é um analista de Investment Banking. Para a empresa "{company_name_input}", forneça:
 
@@ -65,7 +35,21 @@ Você é um analista de Investment Banking. Para a empresa "{company_name_input}
 2. NOTÍCIAS RECENTES: Busque 2-3 notícias recentes com título e link
 3. VALOR DA AÇÃO: Consulte o preço atual ou mais recente da ação
 
-Compile tudo em um relatório organizado e estruturado.
+Compile tudo em um relatório organizado e estruturado no formato:
+
+=== RELATÓRIO DE ANÁLISE ===
+Empresa: [Nome]
+
+1. RESUMO
+[descrição completa]
+
+2. NOTÍCIAS RECENTES
+- [Título 1] - [Link]
+- [Título 2] - [Link]
+- [Título 3] - [Link]
+
+3. PREÇO DA AÇÃO
+[Valor atual com ticker]
 """
 
 print(f"{'='*60}")
@@ -73,12 +57,23 @@ print(f"ANÁLISE DE EMPRESA - {company_name_input.upper()}")
 print(f"{'='*60}\n")
 
 try:
-    response = agent_executor.invoke({"input": query})
+    # LangGraph usa um formato diferente de input
+    messages = [{"role": "user", "content": query}]
+    
+    print("🔍 Iniciando pesquisa automatizada...\n")
+    
+    # Executa o agente
+    result = agent_executor.invoke({"messages": messages})
+    
+    # Extrai a resposta final
+    final_message = result["messages"][-1]
+    
     print("\n" + "="*60)
     print("RELATÓRIO FINAL")
     print("="*60)
-    print(response['output'])
+    print(final_message.content)
     print("\n" + "="*60)
+    
 except Exception as e:
     print(f"❌ Erro na execução: {e}")
     import traceback
