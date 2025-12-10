@@ -2,14 +2,14 @@
 import os
 import sys
 import time
+import re
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
 
-# --- 1. CONFIGURAÇÃO E SEGURANÇA ---
+# --- 1. CONFIGURAÇÃO ---
 if "GOOGLE_API_KEY" in os.environ: del os.environ["GOOGLE_API_KEY"]
 if "GEMINI_API_KEY" not in os.environ:
-    print("❌ ERRO CRÍTICO: Variável GEMINI_API_KEY não definida.")
-    print("   Execute no terminal: export GEMINI_API_KEY='sua_chave_L9DE'")
+    print("❌ ERRO: Defina GEMINI_API_KEY.")
     sys.exit(1)
 
 try:
@@ -21,92 +21,127 @@ except ImportError as e:
     print(f"❌ Dependência faltando: {e}")
     sys.exit(1)
 
-# --- 2. DEFINIÇÃO DO ESTADO ---
+# --- 2. ESTADO ---
 class ResearchState(TypedDict):
     company_name: str
+    ticker: str
     summary_data: str
     news_data: str
     stock_data: str
     final_report: str
 
-# --- 3. NÓS DO GRAFO (AGENTS) ---
+# --- 3. NÓS DO GRAFO ---
+
+def node_ticker_finder(state: ResearchState):
+    """
+    PASSO 1: Sniper de Ticker.
+    Busca o nome/código no Status Invest ou Investing.com para validar o Ticker real.
+    """
+    company = state["company_name"]
+    print(f"\n🔎 [Ticker Finder] Validando identidade de: {company}...")
+    
+    found_ticker = None
+    
+    try:
+        with DDGS() as ddgs:
+            # Busca focada para extrair o ticker do título da página
+            # Ex: busca "petro4", acha "Petrobras (PETR4)..."
+            print("   ↳ Consultando bases de dados (Status Invest / Investing)...")
+            query = f'site:statusinvest.com.br OR site:br.investing.com "{company}"'
+            results = list(ddgs.text(query, max_results=3))
+            
+            # Regex para capturar padrões (XXXX3, XXXX4, XXXX11)
+            ticker_pattern = re.compile(r'\b([A-Z]{4}[3|4|11])\b')
+            
+            for r in results:
+                match = ticker_pattern.search(r['title'].upper())
+                if match:
+                    found_ticker = match.group(0) + ".SA"
+                    print(f"   🎯 Ticker Confirmado: {found_ticker} (Fonte: {r['title'][:30]}...)")
+                    break
+            
+            # Se não achar no título, tenta no corpo
+            if not found_ticker:
+                for r in results:
+                    match = ticker_pattern.search(r['body'].upper())
+                    if match:
+                        found_ticker = match.group(0) + ".SA"
+                        print(f"   🎯 Ticker Encontrado no texto: {found_ticker}")
+                        break
+
+    except Exception as e:
+        print(f"   ❌ Erro na busca do ticker: {e}")
+
+    # Fallback (Palpite)
+    if not found_ticker:
+        # Tenta limpar o input e chutar um ticker comum
+        clean = company.upper().strip().split()[0]
+        # Se o usuário já digitou algo parecendo ticker (ex: PETRO4), tenta ajustar
+        if len(clean) >= 4:
+            guess = f"{clean[:4]}4.SA" # Chuta preferencial
+        else:
+            guess = f"{clean}3.SA"
+        print(f"   ⚠️ Ticker não identificado. Tentando palpite: {guess}")
+        found_ticker = guess
+        
+    return {"ticker": found_ticker}
 
 def node_researcher(state: ResearchState):
-    """Agente Pesquisador: Busca dados fundamentais e notícias DETALHADAS."""
+    """
+    PASSO 2: Busca Notícias usando o TICKER DESCOBERTO.
+    Isso garante que as notícias sejam sobre a AÇÃO, não sobre a marca genérica.
+    """
     company = state["company_name"]
-    print(f"\n🕵️  [Researcher] Iniciando varredura na web sobre: {company}...")
+    ticker_clean = state["ticker"].replace(".SA", "")
+    
+    print(f"🕵️  [Researcher] Buscando inteligência para: {ticker_clean}...")
     
     summary = ""
     news = ""
+    
     try:
         with DDGS() as ddgs:
-            # 1. Resumo (Setor e Histórico)
-            print("   ↳ Buscando fundamentos...")
-            res_summary = list(ddgs.text(f"{company} resumo setor histórico", max_results=2))
-            summary = "\n".join([f"- {r['body']}" for r in res_summary]) if res_summary else "Sem dados fundamentais."
+            # 1. Resumo Institucional
+            res_sum = list(ddgs.text(f"{company} {ticker_clean} ri sobre", max_results=2))
+            summary = "\n".join([f"- {r['body']}" for r in res_sum]) if res_sum else "Sem dados."
+
+            # 2. Notícias (Prioridade: Sites Financeiros)
+            print("   ↳ Varrendo principais portais financeiros...")
             
-            # 2. Notícias (Agora pegando o CONTEÚDO também)
-            print("   ↳ Buscando notícias recentes (com resumo)...")
+            # Query otimizada para Bloomberg, Investing, InfoMoney, etc.
+            sites = "site:br.investing.com OR site:bloomberg.com OR site:infomoney.com.br OR site:valor.globo.com OR site:braziljournal.com"
+            query_news = f'{sites} "{ticker_clean}"'
             
-            # Tenta busca focada
-            res_news = list(ddgs.text(f"{company} notícias recentes finanças brasil", max_results=3))
+            res_news = list(ddgs.text(query_news, max_results=4))
             
-            # Fallback se busca focada falhar
+            # Fallback para busca geral se sites premium falharem
             if not res_news:
-                print("     (Busca focada vazia, tentando genérica...)")
-                res_news = list(ddgs.text(f"{company} notícias brasil", max_results=3))
-            
-            # --- MUDANÇA AQUI: Incluindo o 'body' (conteúdo) para o LLM ler ---
+                print("     (Busca premium vazia. Ampliando para mercado geral...)")
+                q2 = f'"{company}" "{ticker_clean}" notícias mercado financeiro'
+                res_news = list(ddgs.text(q2, max_results=3))
+
             if res_news:
                 news_list = []
                 for r in res_news:
-                    # Formata um bloco rico de informação para o LLM
-                    item = f"""
-                    - TÍTULO: {r['title']}
-                    - CONTEÚDO: {r['body']}
-                    - LINK: {r['href']}
-                    """
+                    title = r['title'].split(" - ")[0].split(" | ")[0]
+                    item = f"FONTE: {title}\nURL: {r['href']}\nRESUMO: {r['body']}\n"
                     news_list.append(item)
                 news = "\n".join(news_list)
             else:
-                news = "Nenhuma notícia encontrada nos últimos dias."
-                
+                news = "Nenhuma notícia relevante encontrada."
+
     except Exception as e:
-        summary = f"Erro na pesquisa: {e}"
-        news = f"Erro ao buscar notícias: {e}"
+        summary = f"Erro: {e}"
+        news = "Indisponível"
         
     return {"summary_data": summary, "news_data": news}
 
 def node_market_analyst(state: ResearchState):
-    """Agente de Mercado: Consulta cotação com mapa expandido."""
-    company = state["company_name"]
-    print(f"📊 [Market Analyst] Consultando dados de mercado...")
+    """PASSO 3: Cotação via Yahoo Finance (usando o ticker validado)."""
+    ticker = state["ticker"]
+    print(f"📊 [Market Analyst] Cotando ativo: {ticker}...")
     
-    # Mapa de tickers EXPANDIDO
-    ticker_map = {
-        "AMBEV": "ABEV3.SA", 
-        "PETROBRAS": "PETR4.SA", 
-        "VALE": "VALE3.SA",
-        "ITAU": "ITUB4.SA", "ITAÚ": "ITUB4.SA", "ITAU UNIBANCO": "ITUB4.SA", "ITAÚ UNIBANCO": "ITUB4.SA",
-        "BRADESCO": "BBDC4.SA", "BANCO BRADESCO": "BBDC4.SA",
-        "BB": "BBAS3.SA", "BANCO DO BRASIL": "BBAS3.SA",
-        "SANTANDER": "SANB11.SA",
-        "WEG": "WEGE3.SA", 
-        "MAGALU": "MGLU3.SA", "MAGAZINE LUIZA": "MGLU3.SA",
-        "NUBANK": "ROXO34.SA", 
-        "BTG": "BPAC11.SA", "BTG PACTUAL": "BPAC11.SA",
-        "KLABIN": "KLBN11.SA",
-        "SUZANO": "SUZB3.SA",
-        "B3": "B3SA3.SA"
-    }
-    
-    name_upper = company.upper().strip()
-    ticker = ticker_map.get(name_upper)
-    
-    if not ticker: ticker = f"{name_upper}.SA"
-            
-    price_info = f"Não encontrado ({ticker})"
-    
+    price_info = f"Erro ({ticker})"
     try:
         stock = yf.Ticker(ticker)
         price = stock.fast_info.last_price
@@ -114,24 +149,22 @@ def node_market_analyst(state: ResearchState):
         if not price:
             hist = stock.history(period="1d")
             if not hist.empty: price = hist['Close'].iloc[-1]
-                
-        if price: 
-            price_info = f"R$ {price:.2f} (Ticker: {ticker})"
-            print(f"   ↳ Cotação encontrada: {price_info}")
+        
+        if price:
+            price_info = f"R$ {price:.2f}"
+            print(f"   ↳ Preço Atual: {price_info}")
         else:
-            print(f"   ↳ Aviso: Preço não disponível para {ticker}")
-            
-    except Exception as e:
-        price_info = f"Erro na cotação: {e}"
+            print(f"   ↳ Aviso: Sem dados no Yahoo para {ticker}")
+    except:
+        price_info = "N/A"
         
     return {"stock_data": price_info}
 
 def node_editor(state: ResearchState):
-    """Editor Chefe: Compila relatório com links E resumos."""
-    print(f"✍️  [Editor] Compilando relatório executivo...")
+    """PASSO 4: Relatório Final."""
+    print(f"✍️  [Editor] Gerando relatório...")
     
-    # Modelo 2.5 Flash
-    MODELO = "gemini-2.5-flash" 
+    MODELO = "gemini-2.5-flash"
     
     llm = ChatGoogleGenerativeAI(
         model=MODELO, 
@@ -139,84 +172,76 @@ def node_editor(state: ResearchState):
         google_api_key=os.environ["GEMINI_API_KEY"]
     )
     
-    # --- MUDANÇA NO PROMPT: Pedindo resumo do conteúdo ---
     prompt = f"""
-    Atue como um Analista de Investment Banking Sênior.
-    Produza um relatório sobre {state['company_name']} com base nos dados abaixo.
+    Você é um Analista de Equity Research. Gere um relatório sobre: {state['company_name']} ({state['ticker']}).
     
-    --- DADOS BRUTOS ---
-    1. Fundamentos: {state['summary_data']}
-    2. Notícias (Com conteúdo): {state['news_data']}
-    3. Cotação: {state['stock_data']}
-    --------------------
+    INPUTS:
+    - Resumo: {state['summary_data']}
+    - Notícias: {state['news_data']}
+    - Cotação: {state['stock_data']}
     
-    FORMATO DE SAÍDA (Markdown):
-    # Relatório de Análise: {state['company_name']}
+    OUTPUT (Markdown):
+    # Equity Research: {state['company_name']}
     
-    ## 🏢 Visão Geral & Setor
-    (Sintetize o setor e o perfil da empresa em 1 parágrafo denso)
+    ## 🏢 Perfil Corporativo
+    (Resumo do negócio em 1 parágrafo)
     
-    ## 📰 Destaques Recentes
-    (Liste as notícias. Para CADA notícia, escreva uma frase resumindo o "CONTEÚDO" e coloque o link clicável no final.)
-    * Exemplo: O banco anunciou lucro recorde no trimestre... [Ler mais](Link)
+    ## 📰 Notícias Relevantes
+    (Liste as 3 mais importantes. OBRIGATÓRIO: Link clicável no final).
+    * [Título da Matéria](Link) - Resumo de 1 linha.
     
-    ## 💰 Dados de Mercado
-    * **Preço Atual:** (Valor da cotação)
+    ## 💰 Dados do Ativo
+    * **Ticker:** {state['ticker']}
+    * **Preço:** {state['stock_data']}
     """
     
-    # Retry Logic
-    max_tentativas = 3
-    for i in range(max_tentativas):
+    for i in range(3):
         try:
-            response = llm.invoke([HumanMessage(content=prompt)])
-            return {"final_report": response.content}
+            res = llm.invoke([HumanMessage(content=prompt)])
+            return {"final_report": res.content}
         except Exception as e:
-            if "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e):
-                wait_time = 80 
-                print(f"⚠️ Cota do Google cheia. Aguardando {wait_time}s... ({i+1}/{max_tentativas})")
-                time.sleep(wait_time)
-            else:
-                return {"final_report": f"Erro fatal ao gerar relatório: {e}"}
-    
-    return {"final_report": "Erro: Limite de cota da API excedido."}
+            if "429" in str(e): 
+                print(f"⚠️ Cota cheia. Aguardando 60s...")
+                time.sleep(60)
+            else: return {"final_report": f"Erro: {e}"}
+            
+    return {"final_report": "Erro de cota."}
 
-# --- 4. CONSTRUÇÃO DO GRAFO ---
+# --- 4. GRAFO ---
 workflow = StateGraph(ResearchState)
+workflow.add_node("TickerFinder", node_ticker_finder)
 workflow.add_node("Researcher", node_researcher)
 workflow.add_node("MarketAnalyst", node_market_analyst)
 workflow.add_node("Editor", node_editor)
 
-workflow.set_entry_point("Researcher")
+workflow.set_entry_point("TickerFinder")
+workflow.add_edge("TickerFinder", "Researcher")
 workflow.add_edge("Researcher", "MarketAnalyst")
 workflow.add_edge("MarketAnalyst", "Editor")
 workflow.add_edge("Editor", END)
+
 app = workflow.compile()
 
-# --- 5. EXECUÇÃO INTERATIVA ---
+# --- 5. EXECUÇÃO ---
 if __name__ == "__main__":
     os.system('cls' if os.name == 'nt' else 'clear')
     print("="*60)
-    print("      📊 AGENTE DE INVESTMENT BANKING (PREMIUM)")
+    print(" 📊 AGENTE SNIPER: STATUS INVEST & AUTO-DISCOVERY")
     print("="*60)
     
     try:
-        if len(sys.argv) > 1:
-            empresa_alvo = " ".join(sys.argv[1:])
-        else:
-            empresa_alvo = input("\n👉 Digite o nome da empresa: ").strip()
-        
-        if not empresa_alvo: sys.exit(0)
+        if len(sys.argv) > 1: target = " ".join(sys.argv[1:])
+        else: target = input("\n👉 Empresa: ").strip()
+        if not target: sys.exit()
 
-        print(f"\n🚀 INICIANDO ANÁLISE PARA: {empresa_alvo.upper()}")
+        print(f"\n🚀 START: {target.upper()}")
         print("-" * 60)
-
-        result = app.invoke({"company_name": empresa_alvo})
+        
+        res = app.invoke({"company_name": target})
         
         print("\n" + "="*60)
-        print("✅ RELATÓRIO FINAL GERADO")
+        print(res["final_report"])
         print("="*60 + "\n")
-        print(result["final_report"])
-        print("\n" + "="*60)
         
-    except KeyboardInterrupt: print("\nCancelado.")
-    except Exception as e: print(f"\n❌ Erro: {e}")
+    except KeyboardInterrupt: print("\nFim.")
+    except Exception as e: print(f"\nErro: {e}")
