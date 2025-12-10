@@ -75,8 +75,3 @@ class StockPriceTool(BaseTool):
     def _arun(self, company_name: str) -> str:
         """Use a ferramenta de forma assíncrona (não implementado para este exemplo)."""
         raise NotImplementedError("Esta ferramenta não suporta execução assíncrona.")
-		
-
-
-		teste
-		
