@@ -1,21 +1,24 @@
-# main.py - Versão LangGraph (LangChain 1.1+)
+# main.py - Versão com DuckDuckGo (sem precisar de Serper)
 import os
 from tools import StockPriceTool
-from langchain_community.tools import SerperAPIWrapper
+from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.tools import Tool
 
-# Imports do LangGraph (novo sistema de agentes no LangChain 1.1+)
+# Imports do LangGraph
 from langgraph.prebuilt import create_react_agent
 
 # --- 1. Inicializar as Ferramentas ---
 stock_tool = StockPriceTool()
-search_wrapper = SerperAPIWrapper()
+
+# Usar DuckDuckGo em vez de Serper (não precisa de API key)
+search = DuckDuckGoSearchRun()
 google_search_tool = Tool(
-    name="Google_Search_Tool",
+    name="Web_Search",
     description="Pesquisa na web para obter: 1. Resumo da empresa. 2. Notícias recentes com links.",
-    func=search_wrapper.run
+    func=search.run
 )
+
 tools = [stock_tool, google_search_tool]
 
 # --- 2. Inicializar o LLM ---
@@ -27,7 +30,6 @@ agent_executor = create_react_agent(llm, tools)
 # --- 4. Execução ---
 company_name_input = "Ambev"
 
-# Sistema de mensagens para o agente
 query = f"""
 Você é um analista de Investment Banking. Para a empresa "{company_name_input}", forneça:
 
@@ -37,30 +39,28 @@ Você é um analista de Investment Banking. Para a empresa "{company_name_input}
 
 Compile tudo em um relatório organizado e estruturado no formato:
 
-=== RELATÓRIO DE ANÁLISE ===
-Empresa: [Nome]
+=== RELATÓRIO DE ANÁLISE: {company_name_input.upper()} ===
 
-1. RESUMO
-[descrição completa]
+📊 1. RESUMO DA EMPRESA
+[Setor, histórico, produtos/serviços]
 
-2. NOTÍCIAS RECENTES
-- [Título 1] - [Link]
-- [Título 2] - [Link]
-- [Título 3] - [Link]
+📰 2. NOTÍCIAS RECENTES
+• [Título] - [Link]
+• [Título] - [Link]
+• [Título] - [Link]
 
-3. PREÇO DA AÇÃO
-[Valor atual com ticker]
+💰 3. VALOR DA AÇÃO
+[Ticker e preço atual]
 """
 
 print(f"{'='*60}")
-print(f"ANÁLISE DE EMPRESA - {company_name_input.upper()}")
+print(f"🔍 ANÁLISE DE EMPRESA - {company_name_input.upper()}")
 print(f"{'='*60}\n")
 
 try:
-    # LangGraph usa um formato diferente de input
     messages = [{"role": "user", "content": query}]
     
-    print("🔍 Iniciando pesquisa automatizada...\n")
+    print("⏳ Coletando informações...\n")
     
     # Executa o agente
     result = agent_executor.invoke({"messages": messages})
@@ -69,7 +69,7 @@ try:
     final_message = result["messages"][-1]
     
     print("\n" + "="*60)
-    print("RELATÓRIO FINAL")
+    print("📋 RELATÓRIO FINAL")
     print("="*60)
     print(final_message.content)
     print("\n" + "="*60)
