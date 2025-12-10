@@ -3,17 +3,18 @@ import os
 # Importa a sua Custom Tool que está no arquivo tools.py
 from tools import StockPriceTool 
 
+# Importa o Agent e o AgentType da comunidade, corrigindo os erros de versão.
 from langchain_community.agents import initialize_agent, AgentType 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_community.tools import GoogleSearchAPIWrapper
+# Usaremos a SerperAPIWrapper por ser mais rápida e fácil de configurar que a GoogleSearchAPIWrapper
+from langchain_community.tools import SerperAPIWrapper 
 from langchain.tools import Tool
-# ...
 
 # --- CONFIGURAÇÃO ---
 # O LangChain vai buscar a chave de API automaticamente na variável de ambiente:
-# os.environ["GEMINI_API_KEY"] = "..."
-# Para a busca, você também precisará configurar a API do Google Search ou Serper
-# Ex: os.environ["GOOGLE_API_KEY"] = "..." e os.environ["GOOGLE_CSE_ID"] = "..."
+# export GEMINI_API_KEY="..."
+# Para a busca, você precisa definir a chave da Serper API:
+# export SERPER_API_KEY="..."
 
 
 # --- 1. Inicializar as Ferramentas ---
@@ -22,8 +23,8 @@ from langchain.tools import Tool
 stock_tool = StockPriceTool()
 
 # B. Ferramenta para Busca na Web (Resumo e Notícias)
-# A GoogleSearchAPIWrapper requer variáveis de ambiente configuradas.
-search_wrapper = GoogleSearchAPIWrapper()
+# A SerperAPIWrapper é usada para coletar Resumo e Notícias.
+search_wrapper = SerperAPIWrapper()
 google_search_tool = Tool(
     name="Google_Search_Tool",
     description=(
@@ -40,6 +41,7 @@ tools = [stock_tool, google_search_tool]
 
 # --- 2. Inicializar o LLM (Gemini) ---
 # O 'gemini-2.5-flash' é rápido e excelente para este tipo de raciocínio.
+# A chave GEMINI_API_KEY é lida automaticamente do ambiente.
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0) 
 
 
