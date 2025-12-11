@@ -31,8 +31,8 @@ def node_ticker_finder(state: ResearchState):
     clean_input = company.upper().strip()
     clean_input = re.sub(r"\[\d+;?\d*[A-Z]", "", clean_input).replace("^", "").strip()
 
-    # Estratégia 0: Input Direto
-    direct_match = re.search(r"\b([A-Z]{4})(3|4|11)\b", clean_input)
+    # Estratégia 0: Input Direto (Regex ajustado para aceitar 1 ou 2 dígitos)
+    direct_match = re.search(r"\b([A-Z]{4}\d{1,2})\b", clean_input)
     if direct_match:
         candidate = direct_match.group(0) + ".SA"
         if validate(candidate):
@@ -87,6 +87,8 @@ def node_ticker_finder(state: ResearchState):
         "COPEL": "CPLE6.SA",
         "ELETROBRAS": "ELET3.SA",
         "ELET": "ELET3.SA",
+        "NUBANK": "ROXO34.SA",  # Adicionado explicitamente também
+        "NU": "ROXO34.SA"
     }
 
     # Verifica match no dicionário
@@ -107,11 +109,11 @@ def node_ticker_finder(state: ResearchState):
     try:
         with suppress_stdout_stderr():
             with DDGS() as ddgs:
-                # Sem aspas para permitir fuzzy search (correção de KBLN4 -> KLBN4)
+                # Sem aspas para permitir fuzzy search
                 query = f"site:statusinvest.com.br OR site:br.investing.com {company} código ação"
                 results = list(ddgs.text(query, region="br-pt", max_results=3))
                 for r in results:
-                    match = re.search(r"\b([A-Z]{4}(?:3|4|11))\b", r["title"].upper())
+                    match = re.search(r"\b([A-Z]{4}\d{1,2})\b", r["title"].upper())
                     if match:
                         candidate = match.group(1) + ".SA"
                         if validate(candidate):
@@ -126,9 +128,7 @@ def node_ticker_finder(state: ResearchState):
                             ddgs.text(q_typo, region="br-pt", max_results=2)
                         )
                         for r in res_typo:
-                            match = re.search(
-                                r"\b([A-Z]{4}(?:3|4|11))\b", r["title"].upper()
-                            )
+                            match = re.search(r"\b([A-Z]{4}\d{1,2})\b", r["title"].upper())
                             if match:
                                 candidate = match.group(1) + ".SA"
                                 if validate(candidate):
@@ -140,7 +140,7 @@ def node_ticker_finder(state: ResearchState):
                     res2 = list(ddgs.text(q2, region="br-pt", max_results=2))
                     for r in res2:
                         match = re.search(
-                            r"\b([A-Z]{4}(?:3|4|11))\b", r["body"].upper()
+                            r"\b([A-Z]{4}\d{1,2})\b", r["body"].upper()
                         )
                         if match:
                             candidate = match.group(1) + ".SA"
@@ -168,8 +168,8 @@ def node_ticker_finder(state: ResearchState):
                 res = llm.invoke([HumanMessage(content=prompt)])
                 candidate_raw = res.content.strip().upper()
 
-                # Extrai ticker da resposta
-                match = re.search(r"\b([A-Z]{4}(?:3|4|11))\b", candidate_raw)
+                # Extrai ticker da resposta (Regex ajustado)
+                match = re.search(r"\b([A-Z]{4}\d{1,2})\b", candidate_raw)
                 if match:
                     candidate = match.group(1) + ".SA"
                     if validate(candidate):
