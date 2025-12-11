@@ -11,7 +11,7 @@ if __name__ == "__main__":
     os.system("cls" if os.name == "nt" else "clear")
 
     print(f"{Colors.HEADER}{'=' * 60}")
-    print(" 📊 AGENTE DE ELITE: V10 (COLORFUL EDITION)")
+    print(" 📊 AGENTE DE PESQUISA DE EMPRESAS")
     print(f"{'=' * 60}{Colors.ENDC}")
 
     try:

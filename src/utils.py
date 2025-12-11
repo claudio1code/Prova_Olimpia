@@ -7,7 +7,7 @@ from .config import Colors
 
 @contextlib.contextmanager
 def suppress_stdout_stderr():
-    """Cala a boca de bibliotecas fofoqueiras."""
+    """Silencia o erro de biblioteca."""
     with open(os.devnull, "w") as devnull:
         old_stdout = sys.stdout
         old_stderr = sys.stderr

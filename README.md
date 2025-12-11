@@ -168,9 +168,8 @@ olimpia/
 │   │   ├── market.py     # Lógica do MarketAnalyst (cálculo de métricas financeiras)
 │   │   └── editor.py     # Lógica do Editor (geração do relatório final com IA)
 │   └── workflow.py       # Definição e compilação do grafo LangGraph
-├── .env                  # Suas chaves de API (NÃO ENVIE PARA O GIT!)
+├── .env                  # Suas chaves de API (NÃO ENVIADO PARA GIT!)
 ├── .gitignore            # Ignora arquivos como .env e venv/
-├── FLOW_DOC.md           # (Este arquivo foi migrado para o README.md e será excluído)
 ├── LICENSE               # Licença do projeto
 ├── README.md             # Documentação completa do projeto (este arquivo)
 ├── main.py               # Ponto de entrada da aplicação

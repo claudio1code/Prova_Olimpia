@@ -6,3 +6,4 @@ langgraph
 duckduckgo-search
 yfinance
 google-search-results
+python-dotenv
