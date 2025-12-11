@@ -1,7 +1,10 @@
+import os
 import re
 
 import yfinance as yf
 from duckduckgo_search import DDGS
+from langchain_core.messages import HumanMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from ..config import Colors
 from ..state import ResearchState
@@ -148,6 +151,36 @@ def node_ticker_finder(state: ResearchState):
             print(f"   {Colors.GREEN}🎯 Ticker Confirmado:{Colors.ENDC} {found_ticker}")
     except:
         pass
+
+    # Estratégia 1.5: Inteligência Artificial (Gemini)
+    if not found_ticker and "GEMINI_API_KEY" in os.environ:
+        print(f"   {Colors.BLUE}🧠 Consultando IA sobre ticker...{Colors.ENDC}")
+        keys = os.environ["GEMINI_API_KEY"].split(",")
+        for key in keys:
+            key = key.strip()
+            if not key:
+                continue
+            try:
+                llm = ChatGoogleGenerativeAI(
+                    model="gemini-2.5-flash", temperature=0.0, google_api_key=key
+                )
+                prompt = f"Qual o código de negociação (Ticker) principal da ação da empresa '{company}' na Bolsa do Brasil (B3)? Responda APENAS o código (ex: PETR4). Se não souber, responda N/A."
+                res = llm.invoke([HumanMessage(content=prompt)])
+                candidate_raw = res.content.strip().upper()
+
+                # Extrai ticker da resposta
+                match = re.search(r"\b([A-Z]{4}(?:3|4|11))\b", candidate_raw)
+                if match:
+                    candidate = match.group(1) + ".SA"
+                    if validate(candidate):
+                        found_ticker = candidate
+                        print(
+                            f"   {Colors.GREEN}🎯 IA Identificou:{Colors.ENDC} {found_ticker}"
+                        )
+                        return {"ticker": found_ticker}
+                break  # Se a API respondeu, encerra o loop de chaves
+            except:
+                continue
 
     # Estratégia 2: Palpite
     if not found_ticker:

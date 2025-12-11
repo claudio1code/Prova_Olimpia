@@ -2,6 +2,7 @@ import os
 
 import requests
 from duckduckgo_search import DDGS
+from langchain_community.utilities import GoogleSearchAPIWrapper
 from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -12,74 +13,142 @@ from ..utils import suppress_stdout_stderr
 
 def node_researcher(state: ResearchState):
     company = state["company_name"]
-    ticker_clean = state["ticker"].replace(".SA", "")
+import os
+
+import requests
+from duckduckgo_search import DDGS
+from langchain_community.utilities import GoogleSearchAPIWrapper
+from langchain_core.messages import HumanMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+from ..config import Colors
+from ..state import ResearchState
+from ..utils import suppress_stdout_stderr
+
+
+def node_researcher(state: ResearchState):
+    company = state["company_name"]
+    ticker_obj = state["ticker"]  # Usar o objeto ticker completo
+    ticker_clean = ticker_obj.replace(".SA", "") if ticker_obj and ticker_obj != "N/A" else company
+
     # Cor AZUL para o Pesquisador
     print(
-        f"{Colors.BLUE}🕵️  [Researcher]{Colors.ENDC} Buscando inteligência para: {Colors.BOLD}{ticker_clean}{Colors.ENDC}..."
+        f"{Colors.BLUE}🕵️  [Researcher]{Colors.ENDC} Buscando inteligência para: {Colors.BOLD}{ticker_clean}{Colors.ENDC}... (Ticker: {ticker_obj if ticker_obj else 'N/A'})"
     )
 
     summary = ""
     news = ""
     try:
         with suppress_stdout_stderr():
-            with DDGS() as ddgs:
-                res_sum = list(
-                    ddgs.text(
-                        f"{company} {ticker_clean} ri institucional",
-                        region="br-pt",
-                        max_results=2,
-                    )
+            # Filtros de exclusão (Anti-SAC e Site Oficial)
+            company_slug = "".join(e for e in company if e.isalnum()).lower()
+            exclusions = f"-site:{company_slug}.com.br -site:reclameaqui.com.br -site:consumidor.gov.br -site:expressmag.com.br"
+            sites = "site:br.investing.com OR site:infomoney.com.br OR site:valor.globo.com OR site:braziljournal.com OR site:moneytimes.com.br"
+
+            candidates = []
+            seen_urls = set()
+
+            def add_candidates(results):
+                for r in results:
+                    # Normalização Google vs DDG
+                    url = r.get("href") or r.get("link")
+                    body = r.get("body") or r.get("snippet")
+                    title = r.get("title")
+
+                    if not url or url in seen_urls:
+                        continue
+                    if "/tag/" in url or "/cotacao/" in url:
+                        continue
+                    # Filtros de exclusão simples
+                    if "expressmag.com.br" in url or "reclameaqui.com.br" in url:
+                        continue
+
+                    seen_urls.add(url)
+                    candidates.append({"title": title, "href": url, "body": body})
+
+            # --- ESTRATÉGIA HÍBRIDA (GOOGLE / DDG) ---
+            USE_GOOGLE = (
+                "GOOGLE_CSE_ID" in os.environ and "GOOGLE_API_KEY" in os.environ
+            )
+
+            search_query_base = ""
+            if ticker_obj and ticker_obj != "N/A":
+                search_query_base = f'"{ticker_clean}"'
+            else:
+                search_query_base = f'"{company}"'
+
+
+            if USE_GOOGLE:
+                print(
+                    f"   {Colors.BLUE}📡 Usando Google Search API (Oficial)...{Colors.ENDC}"
+                )
+                search = GoogleSearchAPIWrapper()
+
+                # Resumo
+                res_sum = search.results(
+                    f"{company} {ticker_clean} ri institucional", num_results=2
                 )
                 summary = (
-                    "\n".join([f"- {r['body']}" for r in res_sum])
+                    "\n".join([f"- {r['snippet']}" for r in res_sum])
                     if res_sum
                     else "Sem dados."
                 )
 
-                # Filtros de exclusão (Anti-SAC e Site Oficial)
-                company_slug = "".join(e for e in company if e.isalnum()).lower()
-                exclusions = f"-site:{company_slug}.com.br -site:reclameaqui.com.br -site:consumidor.gov.br -site:expressmag.com.br"
-
-                sites = "site:br.investing.com OR site:infomoney.com.br OR site:valor.globo.com OR site:braziljournal.com OR site:moneytimes.com.br"
-
-                candidates = []
-                seen_urls = set()
-
-                def add_candidates(results):
-                    for r in results:
-                        url = r["href"]
-                        if url in seen_urls:
-                            continue
-                        if "/tag/" in url or "/cotacao/" in url:
-                            continue
-                        # Filtros de exclusão simples
-                        if "expressmag.com.br" in url or "reclameaqui.com.br" in url:
-                            continue
-
-                        seen_urls.add(url)
-                        candidates.append(r)
-
-                # Coleta em Camadas (Acumulativa até 10 itens)
-
-                # 1. Busca Restrita (Alta Qualidade)
+                # Busca Notícias (Camadas)
                 keywords = "lucro OR resultado OR recomendação OR dividendo"
-                q1 = f'{sites} "{ticker_clean}" {keywords}'
-                res1 = list(ddgs.text(q1, region="br-pt", max_results=5, timelimit="m"))
+                q1 = f'{sites} {search_query_base} {keywords}'
+                res1 = search.results(q1, num_results=5)
                 add_candidates(res1)
 
-                # 2. Busca Anual (Média Qualidade) - se tivermos menos de 5
                 if len(candidates) < 5:
-                    q2 = f'{sites} "{company}"'
-                    res2 = list(
-                        ddgs.text(q2, region="br-pt", max_results=5, timelimit="y")
-                    )
+                    q2 = f'{sites} {search_query_base}'
+                    res2 = search.results(q2, num_results=5)
                     add_candidates(res2)
 
-                # 3. Busca Aberta (Volume) - se ainda tivermos menos de 8
                 if len(candidates) < 8:
-                    q3 = f'"{company}" ações mercado financeiro {exclusions}'
-                    res3 = list(ddgs.text(q3, region="br-pt", max_results=5))
+                    q3 = f'"{company}" ações mercado financeiro {exclusions}' # Busca mais ampla com nome da empresa
+                    res3 = search.results(q3, num_results=5)
                     add_candidates(res3)
+
+            else:
+                # Fallback: DuckDuckGo
+                with DDGS() as ddgs:
+                    # Resumo
+                    res_sum = list(
+                        ddgs.text(
+                            f"{company} {ticker_clean} ri institucional",
+                            region="br-pt",
+                            max_results=2,
+                        )
+                    )
+                    summary = (
+                        "\n".join([f"- {r['body']}" for r in res_sum])
+                        if res_sum
+                        else "Sem dados."
+                    )
+
+                    # Coleta em Camadas (DDG)
+                    # 1. Busca Restrita
+                    keywords = "lucro OR resultado OR recomendação OR dividendo"
+                    q1 = f'{sites} "{ticker_clean}" {keywords}'
+                    res1 = list(
+                        ddgs.text(q1, region="br-pt", max_results=5, timelimit="y")
+                    )
+                    add_candidates(res1)
+
+                    # 2. Busca Anual
+                    if len(candidates) < 5:
+                        q2 = f'{sites} "{company}"' # Usa nome da empresa se ticker falhar
+                        res2 = list(
+                            ddgs.text(q2, region="br-pt", max_results=5, timelimit="y")
+                        )
+                        add_candidates(res2)
+
+                    # 3. Busca Aberta
+                    if len(candidates) < 8:
+                        q3 = f'"{company}" ações mercado financeiro {exclusions}'
+                        res3 = list(ddgs.text(q3, region="br-pt", max_results=5))
+                        add_candidates(res3)
 
                 # 4. Validação de Links (Anti-404) nos candidatos selecionados
                 valid_candidates = []
